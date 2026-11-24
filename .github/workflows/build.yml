@@ -17,6 +17,8 @@ jobs:
       - name: Disk space before
         shell: pwsh
         run: |
+          Write-Host "GITHUB_WORKSPACE = $env:GITHUB_WORKSPACE"
+          Write-Host "TEMP             = $env:TEMP"
           Get-PSDrive -PSProvider FileSystem |
             Select-Object Name,
               @{n='FreeGB'; e={[math]::Round($_.Free/1GB,1)}} |
@@ -40,17 +42,34 @@ jobs:
         shell: pwsh
         run: choco install pkgconfiglite -y --no-progress
 
-      - name: Install Rust toolchain
+      - name: Show Rust toolchain
         shell: pwsh
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup show
           rustc --version
 
+      # Runner hiện có Visual Studio Enterprise 2026 (bản 18), nên tự nạp môi
+      # trường vcvars64 thay vì phụ thuộc vào action bên thứ ba.
       - name: Set up Visual Studio developer environment
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -property installationPath
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found: $vcvars" }
+          Write-Host "Using $vcvars"
+          cmd /c "`"$vcvars`" >nul && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') {
+              "$($matches[1])=$($matches[2])" >> $env:GITHUB_ENV
+            }
+          }
+
+      - name: Check compiler
+        shell: pwsh
+        run: |
+          Get-Command clang-cl | Select-Object Source
+          clang-cl --version
+          Get-Command cl, link, ninja, cmake | Select-Object Name, Source
 
       - name: Build Ladybird
         shell: pwsh
