@@ -42,6 +42,14 @@ jobs:
         shell: pwsh
         run: choco install pkgconfiglite -y --no-progress
 
+      # Runner có LLVM 20 cài sẵn, nhưng thư viện chuẩn của VS 2026 (MSVC 14.52)
+      # yêu cầu Clang 22 trở lên (lỗi STL1000), nên nâng cấp LLVM trước khi build.
+      - name: Upgrade LLVM
+        shell: pwsh
+        run: |
+          choco upgrade llvm -y --no-progress
+          & "C:\Program Files\LLVM\bin\clang-cl.exe" --version
+
       - name: Show Rust toolchain
         shell: pwsh
         run: |
@@ -67,8 +75,19 @@ jobs:
       - name: Check compiler
         shell: pwsh
         run: |
+          Write-Host "--- clang-cl on PATH (the one the build will use) ---"
           Get-Command clang-cl | Select-Object Source
-          clang-cl --version
+          $ver = clang-cl --version | Out-String
+          Write-Host $ver
+          if ($env:llvmX64 -and (Test-Path (Join-Path $env:llvmX64 "clang-cl.exe"))) {
+            Write-Host "--- clang-cl bundled with Visual Studio (for reference) ---"
+            & (Join-Path $env:llvmX64 "clang-cl.exe") --version
+          }
+          $m = [regex]::Match($ver, 'clang version (\d+)')
+          if (-not $m.Success) { throw "Cannot read clang-cl version" }
+          if ([int]$m.Groups[1].Value -lt 22) {
+            throw "clang-cl $($m.Groups[1].Value) is too old: the MSVC STL in VS 2026 needs Clang 22 or newer"
+          }
           Get-Command cl, link, ninja, cmake | Select-Object Name, Source
 
       - name: Build Ladybird
