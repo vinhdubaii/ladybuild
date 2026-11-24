@@ -13,6 +13,9 @@ jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 360   # mức tối đa của runner miễn phí
+    env:
+      # Đặt cache nhị phân của vcpkg ở ổ D: để lưu/khôi phục giữa các lần chạy
+      VCPKG_DEFAULT_BINARY_CACHE: D:\vcpkg-cache
     steps:
       - name: Disk space before
         shell: pwsh
@@ -37,6 +40,40 @@ jobs:
           ref: ${{ inputs.ref }}
           path: ladybird
           fetch-depth: 1
+
+      # Clang 22 có thêm cảnh báo mới (ví dụ -Wunused-but-set-global) mà Ladybird
+      # chưa kịp sửa, trong khi Ladybird biên dịch với -Werror nên cảnh báo thành
+      # lỗi. Đổi -Werror thành -Wno-error trong các file CMake (chỉ cho bản build này).
+      - name: Relax -Werror
+        shell: pwsh
+        working-directory: ladybird
+        run: |
+          $files = Get-ChildItem -Recurse -File -Include CMakeLists.txt,*.cmake,CMakePresets.json |
+                   Where-Object { $_.FullName -notmatch '\\(Build|\.git)\\' }
+          $patched = 0
+          foreach ($f in $files) {
+            $text = Get-Content -Raw -LiteralPath $f.FullName
+            if ($text -match '-Werror(?![=\w-])') {
+              Write-Host "Patching $($f.FullName)"
+              $new = $text -replace '-Werror(?![=\w-])', '-Wno-error'
+              Set-Content -LiteralPath $f.FullName -Value $new -NoNewline
+              $patched++
+            }
+          }
+          Write-Host "Patched $patched file(s)"
+          if ($patched -eq 0) { Write-Warning "No -Werror found in CMake files" }
+
+      - name: Prepare vcpkg binary cache
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache/restore@v4
+        with:
+          path: D:\vcpkg-cache
+          key: vcpkg-windows-v1-${{ github.run_id }}
+          restore-keys: |
+            vcpkg-windows-v1-
 
       - name: Install pkgconfiglite
         shell: pwsh
@@ -99,6 +136,15 @@ jobs:
           } else {
             python Meta\ladybird.py build
           }
+
+      # Lưu cache ngay cả khi build lỗi, để lần chạy sau khỏi build lại vcpkg
+      - name: Save vcpkg binary cache
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: D:\vcpkg-cache
+          key: vcpkg-windows-v1-${{ github.run_id }}
 
       - name: Disk space after
         if: always()
